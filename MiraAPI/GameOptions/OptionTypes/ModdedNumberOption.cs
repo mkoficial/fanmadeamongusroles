@@ -1,4 +1,5 @@
 ﻿using System;
+using System.Text.RegularExpressions;
 using AmongUs.GameOptions;
 using MiraAPI.Networking;
 using MiraAPI.Utilities;
@@ -43,30 +44,34 @@ public class ModdedNumberOption : ModdedOption<float>
     public string NegativeWordValue { get; }
 
     /// <summary>
-    /// Gets a value indicating whether zero is infinity.
-    /// </summary>
-    public bool ZeroInfinity => ZeroWordValue == "∞";
-
-    /// <summary>
     /// Gets a value indicating whether holding shift will divide the increment.
     /// </summary>
     public bool ShiftIncrement { get; }
 
     /// <summary>
+    /// Gets a value indicating whether zero is infinity.
+    /// </summary>
+    public bool ZeroInfinity => ZeroWordValue == "∞";
+
+    private static readonly Regex TrailingZeroRegex = new(@"\.0+(?!\d)", RegexOptions.Compiled, TimeSpan.FromMilliseconds(100));
+
+    /// <summary>
     /// Initializes a new instance of the <see cref="ModdedNumberOption"/> class.
     /// </summary>
+    /// <param name="groupPrefix">The translation ID prefix of the group containing this option.</param>
     /// <param name="title">The title of the option.</param>
     /// <param name="defaultValue">The default value as a float.</param>
     /// <param name="min">The minimum value.</param>
     /// <param name="max">The maximum value.</param>
     /// <param name="increment">The increment.</param>
-    /// <param name="suffixType">The suffix type.</param>
     /// <param name="zeroBehavior">Determines what is shown for zero.</param>
     /// <param name="negativeBehavior">Determines what is shown for negative 1.</param>
-    /// <param name="halfIncrements">Whether increments can be split in half.</param>
+    /// <param name="suffixType">The suffix type.</param>
     /// <param name="formatString">Optional format string for the option screen.</param>
+    /// <param name="halfIncrements">Whether increments can be split in half.</param>
     /// <param name="includeInPreset">Whether to include this option in the preset or not.</param>
     public ModdedNumberOption(
+        string groupPrefix,
         string title,
         float defaultValue,
         float min,
@@ -78,7 +83,7 @@ public class ModdedNumberOption : ModdedOption<float>
         string? formatString = null,
         bool halfIncrements = false,
         bool includeInPreset = true)
-        : base(title, defaultValue, includeInPreset)
+        : base(groupPrefix, title, defaultValue, includeInPreset)
     {
         Min = min;
         Max = max;
@@ -113,14 +118,72 @@ public class ModdedNumberOption : ModdedOption<float>
     /// <summary>
     /// Initializes a new instance of the <see cref="ModdedNumberOption"/> class.
     /// </summary>
+    /// <param name="groupPrefix">The translation ID prefix of the group containing this option.</param>
     /// <param name="title">The title of the option.</param>
     /// <param name="defaultValue">The default value as a float.</param>
     /// <param name="min">The minimum value.</param>
     /// <param name="max">The maximum value.</param>
     /// <param name="increment">The increment.</param>
     /// <param name="suffixType">The suffix type.</param>
-    /// <param name="zeroInfinity">Whether zero is infinity or not.</param>
     /// <param name="formatString">Optional format string for the option screen.</param>
+    /// <param name="zeroInfinity">Whether zero is infinity or not.</param>
+    /// <param name="includeInPreset">Whether to include this option in the preset or not.</param>
+    public ModdedNumberOption(
+        string groupPrefix,
+        string title,
+        float defaultValue,
+        float min,
+        float max,
+        float increment,
+        MiraNumberSuffixes suffixType,
+        string? formatString = null,
+        bool zeroInfinity = false,
+        bool includeInPreset = true)
+        : this(groupPrefix, title, defaultValue, min, max, increment, zeroInfinity ? "∞" : "#", "#", suffixType, formatString, increment == 1f, includeInPreset)
+    {
+    }
+
+    /// <summary>
+    /// Initializes a new instance of the <see cref="ModdedNumberOption"/> class.
+    /// </summary>
+    /// <param name="title">The title of the option.</param>
+    /// <param name="defaultValue">The default value as a float.</param>
+    /// <param name="min">The minimum value.</param>
+    /// <param name="max">The maximum value.</param>
+    /// <param name="increment">The increment.</param>
+    /// <param name="zeroBehavior">Determines what is shown for zero.</param>
+    /// <param name="negativeBehavior">Determines what is shown for negative 1.</param>
+    /// <param name="suffixType">The suffix type.</param>
+    /// <param name="formatString">Optional format string for the option screen.</param>
+    /// <param name="halfIncrements">Whether increments can be split in half.</param>
+    /// <param name="includeInPreset">Whether to include this option in the preset or not.</param>
+    public ModdedNumberOption(
+        string title,
+        float defaultValue,
+        float min,
+        float max,
+        float increment,
+        string zeroBehavior,
+        string negativeBehavior,
+        MiraNumberSuffixes suffixType,
+        string? formatString = null,
+        bool halfIncrements = false,
+        bool includeInPreset = true)
+        : this(string.Empty, title, defaultValue, min, max, increment, zeroBehavior, negativeBehavior, suffixType, formatString, halfIncrements, includeInPreset)
+    {
+    }
+
+    /// <summary>
+    /// Initializes a new instance of the <see cref="ModdedNumberOption"/> class.
+    /// </summary>
+    /// <param name="title">The title of the option.</param>
+    /// <param name="defaultValue">The default value as a float.</param>
+    /// <param name="min">The minimum value.</param>
+    /// <param name="max">The maximum value.</param>
+    /// <param name="increment">The increment.</param>
+    /// <param name="suffixType">The suffix type.</param>
+    /// <param name="formatString">Optional format string for the option screen.</param>
+    /// <param name="zeroInfinity">Whether zero is infinity or not.</param>
     /// <param name="includeInPreset">Whether to include this option in the preset or not.</param>
     public ModdedNumberOption(
         string title,
@@ -132,7 +195,7 @@ public class ModdedNumberOption : ModdedOption<float>
         string? formatString = null,
         bool zeroInfinity = false,
         bool includeInPreset = true)
-        : this(title, defaultValue, min, max, increment, zeroInfinity ? "∞" : "#", "#", suffixType, formatString, increment == 1f, includeInPreset)
+        : this(string.Empty, title, defaultValue, min, max, increment, suffixType, formatString, zeroInfinity, includeInPreset)
     {
     }
 
@@ -145,8 +208,7 @@ public class ModdedNumberOption : ModdedOption<float>
         Transform container)
     {
         var numberOption = Object.Instantiate(numberOpt, Vector3.zero, Quaternion.identity, container);
-        numberOption.name =
-            $"{ParentMod!.OptionsTitleText}.NumberOption.{TranslationController.Instance.GetString(StringName)}";
+        numberOption.name = $"{ParentMod!.OptionsTitleText}.NumberOption.{Title}";
         var optionComponent = numberOption.gameObject.AddComponent<MiraNumberOptionComponent>();
         optionComponent.NumberOption = this;
         optionComponent.DefaultIncrement = Increment;
@@ -155,7 +217,7 @@ public class ModdedNumberOption : ModdedOption<float>
         optionComponent.ZeroValue = ZeroWordValue;
 
         numberOption.SetUpFromData(Data, 20);
-        numberOption.OnValueChanged = (Il2CppSystem.Action<OptionBehaviour>)ValueChanged;
+        numberOption.OnValueChanged = (Action<OptionBehaviour>)ValueChanged;
 
         numberOption.Title = StringName;
         numberOption.Value = Value;
@@ -169,6 +231,22 @@ public class ModdedNumberOption : ModdedOption<float>
         OptionBehaviour = numberOption;
 
         return numberOption;
+    }
+
+    /// <inheritdoc />
+    public override string GetDisplayValue()
+    {
+        if (this is { NegativeWordValue: not "#", Value: -1 })
+        {
+            return NegativeWordValue;
+        }
+
+        if (this is { ZeroWordValue: not "#", Value: 0 })
+        {
+            return ZeroWordValue;
+        }
+
+        return TrailingZeroRegex.Replace(Data.GetValueString(Value), string.Empty);
     }
 
     /// <inheritdoc />
@@ -198,22 +276,16 @@ public class ModdedNumberOption : ModdedOption<float>
     /// <inheritdoc />
     protected override void OnValueChanged(float newValue)
     {
-        Value = Mathf.Clamp(newValue, Min, Max);
-        if (ShowNotification)
-        {
-            ModdedOptionsManager.AddSettingsChangeMessage(
-                HudManager.Instance.Notifier,
-                StringName,
-                Data.GetValueString(newValue),
-                Configuration.PopUpTextColor,
-                Configuration.PopUpIconTmp,
-                false);
-        }
-
-        if (OptionBehaviour is NumberOption opt)
+        if (OptionBehaviour && OptionBehaviour is NumberOption opt)
         {
             opt.Value = Value;
         }
+    }
+
+    /// <inheritdoc />
+    protected override float ModifyValue(float newValue, float oldValue)
+    {
+        return Math.Clamp(newValue, Min, Max);
     }
 
     /// <summary>
@@ -223,6 +295,6 @@ public class ModdedNumberOption : ModdedOption<float>
     /// <returns>Integer value.</returns>
     public static implicit operator int(ModdedNumberOption option)
     {
-        return (int)option.Value;
+        return (int)Math.Round(option.Value);
     }
 }

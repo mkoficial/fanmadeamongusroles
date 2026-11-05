@@ -4,7 +4,6 @@ using System.Collections.Generic;
 using System.Diagnostics.CodeAnalysis;
 using System.Linq;
 using System.Reflection;
-using System.Runtime.CompilerServices;
 using BepInEx.Configuration;
 using HarmonyLib;
 using MiraAPI.GameModes;
@@ -25,17 +24,21 @@ namespace MiraAPI.GameOptions;
 /// </summary>
 public static class ModdedOptionsManager
 {
-    private static readonly Dictionary<MethodBase, PropertyOptionAttribute> GetterLookups = [];
-    private static readonly Dictionary<MethodBase, PropertyOptionAttribute> SetterLookups = [];
+    private static readonly Dictionary<RuntimeMethodHandle, PropertyOptionAttribute> GetterLookups = [];
+    private static readonly Dictionary<RuntimeMethodHandle, PropertyOptionAttribute> SetterLookups = [];
     private static readonly Dictionary<Type, AbstractOptionGroup> TypeToGroup = [];
     private static readonly HashSet<PropertyInfo> OptionAttributes = [];
 
-    private static readonly HarmonyMethod CachedGetterPatch = new(typeof(ModdedOptionsManager), nameof(PropertyGetterPatch));
-    private static readonly HarmonyMethod CachedSetterPatch = new(typeof(ModdedOptionsManager), nameof(PropertySetterPatch));
+    private static readonly MethodInfo OpenGetterPatch = typeof(ModdedOptionsManager)
+        .GetMethods(BindingFlags.Public | BindingFlags.Static)
+        .First(m => m.Name == nameof(PropertyGetterPatch) && m.IsGenericMethodDefinition);
+    private static readonly MethodInfo OpenSetterPatch = typeof(ModdedOptionsManager)
+        .GetMethods(BindingFlags.Public | BindingFlags.Static)
+        .First(m => m.Name == nameof(PropertySetterPatch) && m.IsGenericMethodDefinition);
+    private static readonly Dictionary<Type, HarmonyMethod> ConcretisedGetters = [];
+    private static readonly Dictionary<Type, HarmonyMethod> ConcretisedSetters = [];
 
-    internal static readonly ConditionalWeakTable<object, ModdedOptionListAttribute> ListInstanceCache = [];
     internal static readonly Dictionary<OptionBehaviour, ModdedPlayerOption> CreatedPlayerOptions = [];
-    internal static readonly Dictionary<OptionBehaviour, ModdedStringOption> CreatedStringOptions = [];
     internal static readonly Dictionary<Type, List<AbstractOptionGroup>> GameModeOptionGroups = [];
     internal static readonly Dictionary<uint, IModdedOption> ModdedOptions = [];
     internal static readonly List<AbstractOptionGroup> Groups = [];
@@ -148,7 +151,9 @@ public static class ModdedOptionsManager
         Type type,
         ModdedOptionAttribute attribute,
         PropertyInfo property,
-        MiraPluginInfo pluginInfo)
+        MiraPluginInfo pluginInfo,
+        Type propType,
+        object[] attributes)
     {
         if (!OptionAttributes.Add(property))
         {
@@ -162,7 +167,7 @@ public static class ModdedOptionsManager
             return;
         }
 
-        var option = attribute.CreateOption(property.GetValue(group), property);
+        var option = attribute.CreateOption(property.GetValue(group), property, group);
 
         if (option == null)
         {
@@ -170,24 +175,34 @@ public static class ModdedOptionsManager
             return;
         }
 
+        if (!ConcretisedGetters.TryGetValue(propType, out var concreteGetter))
+        {
+            concreteGetter = new(OpenGetterPatch.MakeGenericMethod(propType));
+            ConcretisedGetters[propType] = concreteGetter;
+        }
+
         var getterOriginal = property.GetGetMethod(true)!;
-        PluginSingleton<MiraApiPlugin>.Instance.Harmony.Patch(getterOriginal, prefix: CachedGetterPatch);
-        GetterLookups[getterOriginal] = attribute;
+        PluginSingleton<MiraApiPlugin>.Instance.Harmony.Patch(getterOriginal, prefix: concreteGetter);
+        GetterLookups[getterOriginal.MethodHandle] = attribute;
 
         var setterOriginal = property.GetSetMethod(true);
 
         if (setterOriginal != null)
         {
-            PluginSingleton<MiraApiPlugin>.Instance.Harmony.Patch(setterOriginal, postfix: CachedSetterPatch);
-            SetterLookups[setterOriginal] = attribute;
+            if (!ConcretisedSetters.TryGetValue(propType, out var concreteSetter))
+            {
+                concreteSetter = new(OpenSetterPatch.MakeGenericMethod(propType));
+                ConcretisedSetters[propType] = concreteSetter;
+            }
+
+            PluginSingleton<MiraApiPlugin>.Instance.Harmony.Patch(setterOriginal, postfix: concreteSetter);
+            SetterLookups[setterOriginal.MethodHandle] = attribute;
         }
 
         attribute.HolderOption = option;
-        attribute.ValueType = property.PropertyType;
+        attribute.ValueType = propType;
 
-        var customAttributes = property.GetCustomAttributes(false);
-
-        foreach (var attr in customAttributes)
+        foreach (var attr in attributes)
         {
             switch (attr)
             {
@@ -235,7 +250,9 @@ public static class ModdedOptionsManager
         Type type,
         ModdedOptionListAttribute attribute,
         PropertyInfo property,
-        MiraPluginInfo pluginInfo)
+        MiraPluginInfo pluginInfo,
+        Type propType,
+        object[] attributes)
     {
         if (!OptionAttributes.Add(property))
         {
@@ -257,8 +274,11 @@ public static class ModdedOptionsManager
             return;
         }
 
-        var propertyList = (IList)propertyVal;
-        var optionList = attribute.CreateOptionList(propertyList, property);
+        var list = (IList)propertyVal;
+
+        attribute.Titles = new string[list.Count];
+
+        var optionList = attribute.CreateOptionList(list, property, group);
 
         if (optionList == null)
         {
@@ -266,44 +286,54 @@ public static class ModdedOptionsManager
             return;
         }
 
-        if (propertyList.Count != optionList.Count)
+        if (list.Count != optionList.Count)
         {
             Error("Mismatch in count between values and created options.");
             return;
         }
 
-        var listType = propertyList.GetType();
-        var valueType = listType.GetGenericArguments()[0];
-
-        if (!listType.IsGenericType || listType.GetGenericTypeDefinition() != typeof(ModdedArray<>))
+        if (!propType.IsGenericType || propType.GetGenericTypeDefinition() != typeof(ModdedArray<>))
         {
-            Error($"Please use ModdedList<{valueType.Name}> for modded option lists.");
+            var typeName = propType.IsGenericType ? propType.GetGenericArguments()[0].Name : "T";
+            Error($"Please use ModdedArray<{typeName}> for modded option lists.");
             return;
         }
 
+        if (!ConcretisedGetters.TryGetValue(propType, out var concreteGetter))
+        {
+            concreteGetter = new(OpenGetterPatch.MakeGenericMethod(propType));
+            ConcretisedGetters[propType] = concreteGetter;
+        }
+
         var getterOriginal = property.GetGetMethod(true)!;
-        PluginSingleton<MiraApiPlugin>.Instance.Harmony.Patch(getterOriginal, prefix: CachedGetterPatch);
-        GetterLookups[getterOriginal] = attribute;
+        PluginSingleton<MiraApiPlugin>.Instance.Harmony.Patch(getterOriginal, prefix: concreteGetter);
+        GetterLookups[getterOriginal.MethodHandle] = attribute;
 
         var setterOriginal = property.GetSetMethod(true);
 
         if (setterOriginal != null)
         {
-            PluginSingleton<MiraApiPlugin>.Instance.Harmony.Patch(setterOriginal, postfix: CachedSetterPatch);
-            SetterLookups[setterOriginal] = attribute;
+            if (!ConcretisedSetters.TryGetValue(propType, out var concreteSetter))
+            {
+                concreteSetter = new(OpenSetterPatch.MakeGenericMethod(propType));
+                ConcretisedSetters[propType] = concreteSetter;
+            }
+
+            PluginSingleton<MiraApiPlugin>.Instance.Harmony.Patch(setterOriginal, postfix: concreteSetter);
+            SetterLookups[setterOriginal.MethodHandle] = attribute;
         }
 
+        var valueType = propType.GetGenericArguments()[0];
+
         attribute.HolderOptionList = optionList;
-        attribute.Value = propertyList;
+        attribute.Value = list;
         attribute.ValueType = valueType;
 
-        ListInstanceCache.Add(propertyVal, attribute);
-
-        var customAttributes = property.GetCustomAttributes(false);
+        ((IModdedArrayBinding)propertyVal).Bind(attribute);
 
         Func<int, Delegate?>? visibilityFactory = null, getterFactory = null, setterFactory = null, changedFactory = null;
 
-        foreach (var attr in customAttributes)
+        foreach (var attr in attributes)
         {
             switch (attr)
             {
@@ -327,7 +357,7 @@ public static class ModdedOptionsManager
             var option = optionList[i];
 
             if (visibilityFactory != null)
-                option.Visible = (Func<bool>)(visibilityFactory(i) ?? DelegateUtilities.AlwaysTrue);
+                option.Visible = visibilityFactory(i) as Func<bool> ?? DelegateUtilities.AlwaysTrue;
 
             if (getterFactory != null)
                 option.Getter = getterFactory(i);
@@ -411,15 +441,38 @@ public static class ModdedOptionsManager
     /// <param name="value">The new object value.</param>
     [SuppressMessage("ReSharper", "InconsistentNaming", Justification = "Harmony naming convention.")]
     [SuppressMessage("Naming", "CA1707:Identifiers should not contain underscores", Justification = "Read above.")]
+    [Obsolete("Use PropertySetterPatch<T> instead. This will be removed in a future version.")]
     public static void PropertySetterPatch(MethodBase __originalMethod, object value)
     {
-        if (!SetterLookups.TryGetValue(__originalMethod, out var attribute))
+        if (!SetterLookups.TryGetValue(__originalMethod.MethodHandle, out var attribute))
             return;
 
         attribute.SetValue(value);
 
-        if (attribute is ModdedOptionListAttribute listAttribute && value != null)
-            ListInstanceCache.AddOrUpdate(value, listAttribute);
+        if (attribute is ModdedOptionListAttribute listAttribute && value is IModdedArrayBinding binding)
+            binding.Bind(listAttribute);
+    }
+
+    /// <summary>
+    /// Patches the setter of a property to update the value of the option.
+    /// </summary>
+    /// <typeparam name="T">The type of the option value.</typeparam>
+    /// <param name="__originalMethod">The original setter method.</param>
+    /// <param name="value">The new object value.</param>
+    [SuppressMessage("ReSharper", "InconsistentNaming", Justification = "Harmony naming convention.")]
+    [SuppressMessage("Naming", "CA1707:Identifiers should not contain underscores", Justification = "Read above.")]
+    public static void PropertySetterPatch<T>(MethodBase __originalMethod, T value)
+    {
+        if (!SetterLookups.TryGetValue(__originalMethod.MethodHandle, out var attribute))
+            return;
+
+        if (attribute is ITypedOption<T> typedAttribute)
+            typedAttribute.SetValueUnboxed(value);
+        else
+            attribute.SetValue(value!);
+
+        if (attribute is ModdedOptionListAttribute listAttribute && value is IModdedArrayBinding binding)
+            binding.Bind(listAttribute);
     }
 
     /// <summary>
@@ -430,12 +483,35 @@ public static class ModdedOptionsManager
     /// <returns><see langword="false"/> so the original getter gets skipped.</returns>
     [SuppressMessage("ReSharper", "InconsistentNaming", Justification = "Harmony naming convention")]
     [SuppressMessage("Naming", "CA1707:Identifiers should not contain underscores", Justification = "Read above.")]
+    [Obsolete("Use PropertyGetterPatch<T> instead. This will be removed in a future version.")]
     public static bool PropertyGetterPatch(MethodBase __originalMethod, ref object __result)
     {
-        if (!GetterLookups.TryGetValue(__originalMethod, out var attribute))
+        if (!GetterLookups.TryGetValue(__originalMethod.MethodHandle, out var attribute))
             return true;
 
         __result = attribute.GetValue();
+        return false;
+    }
+
+    /// <summary>
+    /// Patches the getter of a property to return the value of the option.
+    /// </summary>
+    /// <typeparam name="T">The type of the option value.</typeparam>
+    /// <param name="__originalMethod">The original getter method.</param>
+    /// <param name="__result">The result of the property getter.</param>
+    /// <returns><see langword="false"/> so the original getter gets skipped.</returns>
+    [SuppressMessage("ReSharper", "InconsistentNaming", Justification = "Harmony naming convention")]
+    [SuppressMessage("Naming", "CA1707:Identifiers should not contain underscores", Justification = "Read above.")]
+    public static bool PropertyGetterPatch<T>(MethodBase __originalMethod, ref T __result)
+    {
+        if (!GetterLookups.TryGetValue(__originalMethod.MethodHandle, out var attribute))
+            return true;
+
+        if (attribute is ITypedOption<T> typedAttribute)
+            __result = typedAttribute.GetValueUnboxed();
+        else
+            __result = (T)attribute.GetValue();
+
         return false;
     }
 }

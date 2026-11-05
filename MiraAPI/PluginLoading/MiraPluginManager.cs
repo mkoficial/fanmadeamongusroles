@@ -221,6 +221,9 @@ public sealed class MiraPluginManager
         }
     }
 
+    private static readonly Type OptionType = typeof(IModdedOption);
+    private static readonly Type OptionListType = typeof(IModdedOptionList);
+
     private static bool RegisterOptions(Type type, MiraPluginInfo pluginInfo)
     {
         try
@@ -240,34 +243,46 @@ public sealed class MiraPluginManager
                 if (property.IsDefined<MiraIgnoreAttribute>())
                     continue;
 
-                if (property.PropertyType.IsAssignableTo(typeof(IModdedOption)))
+                if (property.GetMethod == null)
+                {
+                    Error($"Non-ignored option property {property.Name} in {type.Name} must at least have a getter.");
+                    continue;
+                }
+
+                var propType = property.PropertyType;
+
+                if (propType.IsAssignableTo(OptionType))
                 {
                     ModdedOptionsManager.RegisterPropertyOption(type, property, pluginInfo);
                     continue;
                 }
 
-                if (property.PropertyType.IsAssignableTo(typeof(IModdedOptionList)))
+                if (propType.IsAssignableTo(OptionListType))
                 {
                     ModdedOptionsManager.RegisterPropertyOptionList(type, property, pluginInfo);
                     continue;
                 }
 
-                var attribute = property.GetCustomAttribute<ModdedOptionAttribute>();
-                if (attribute != null)
-                {
-                    ModdedOptionsManager.RegisterAttributeOption(type, attribute, property, pluginInfo);
-                    continue;
-                }
+                var attributes = property.GetCustomAttributes(false);
 
-                var listAttr = property.GetCustomAttribute<ModdedOptionListAttribute>();
-                if (listAttr != null)
+                foreach (var attr in attributes)
                 {
-                    ModdedOptionsManager.RegisterAttributeOptionList(type, listAttr, property, pluginInfo);
+                    if (attr is ModdedOptionAttribute moddedAttr)
+                    {
+                        ModdedOptionsManager.RegisterAttributeOption(type, moddedAttr, property, pluginInfo, propType, attributes);
+                        break;
+                    }
+
+                    if (attr is ModdedOptionListAttribute listAttr)
+                    {
+                        ModdedOptionsManager.RegisterAttributeOptionList(type, listAttr, property, pluginInfo, propType, attributes);
+                        break;
+                    }
                 }
             }
 
             foreach (var field in type.GetFields(DeclaredInstanceMembers)
-                .Where(f => !IsAutoPropertyBackingField(f) && (f.FieldType.IsAssignableTo(typeof(IModdedOption)) || f.FieldType.IsAssignableTo(typeof(IModdedOptionList)))))
+                .Where(f => !IsAutoPropertyBackingField(f) && (f.FieldType.IsAssignableTo(OptionType) || f.FieldType.IsAssignableTo(OptionListType))))
             {
                 Error($"{field.Name} is a field, not a property. Use properties for options.");
             }
