@@ -3,7 +3,8 @@
 namespace MiraAPI.Events;
 
 /// <summary>
-/// Event handle to use when unregistering a <see cref="MiraEvent"/>.
+/// Wrapper for <see cref="MiraEvent"/> handlers.
+/// Also used when unregistering a <see cref="MiraEvent"/>.
 /// </summary>
 public class MiraEventHandle
 {
@@ -12,11 +13,20 @@ public class MiraEventHandle
     /// </summary>
     public Type EventType { get; }
 
-    internal MiraEventWrapper EventWrapper { get; }
+    /// <summary>
+    /// Gets the priority of the handler. Lower values are called first.
+    /// </summary>
+    internal int Priority { get; }
 
-    internal MiraEventHandle(Type type, MiraEventWrapper eventWrapper)
+    /// <summary>
+    /// Gets the event handler delegate.
+    /// </summary>
+    internal Delegate EventHandler { get; }
+
+    internal MiraEventHandle(Delegate eventHandler, int priority, Type type)
     {
+        EventHandler = eventHandler;
+        Priority = priority;
         EventType = type;
-        EventWrapper = eventWrapper;
     }
 }
